@@ -1,3 +1,5 @@
+export TF_ACC_TERRAFORM_VERSION=1.5.0
+
 TEST?=$$(go list ./... |grep -v 'vendor')
 GOFMT_FILES?=$$(find . -name '*.go' |grep -v vendor)
 WEBSITE_REPO=github.com/hashicorp/terraform-website
@@ -8,13 +10,38 @@ default: build
 build: fmtcheck
 	go install
 
+
+.PHONY: dev-setup
+dev-setup: ## setup development dependencies
+	@which ./bin/golangci-lint || curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b ./bin v1.53.3
+
+
+.PHONY: dev-cleanup
+dev-cleanup: ## cleanup development dependencies
+	rm -rf bin/*
+
+.PHONY: mod
+mod: ## add missing and remove unused modules
+	go mod tidy -compat=1.20
+
+.PHONY: lint-check
+lint-check: ## Run static code analysis and check formatting
+	./bin/golangci-lint run ./... -v
+
+.PHONY: lint-fix
+lint-fix: ## Run static code analysis, check formatting and try to fix findings
+	./bin/golangci-lint run ./... -v --fix
+
+
 test: fmtcheck
 	go test -i $(TEST) || exit 1
 	echo $(TEST) | \
 		xargs -t -n4 go test $(TESTARGS) -timeout=30s -parallel=4
 
 testacc: fmtcheck
-	INFLUXDB_USERNAME=test INFLUXDB_PASSWORD=test TF_ACC=1 go test $(TEST) -v $(TESTARGS) -timeout 120m
+	TF_ACC=1 \
+	INFLUXDB_USERNAME=test INFLUXDB_PASSWORD=test \
+	go test -v ./... -timeout 120m
 
 vet:
 	@echo "go vet ."

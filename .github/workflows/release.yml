@@ -24,11 +24,16 @@ jobs:
       -
         name: Unshallow
         run: git fetch --prune --unshallow
-      -
+      - 
         name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v4
         with:
-          go-version: 1.16
+          go-version: '1.16'
+
+      - name: flux requirements
+        run: |
+          sudo apt-get install -y clang pkg-config
+          go get github.com/influxdata/pkg-config
       -
         name: Import GPG key
         id: import_gpg

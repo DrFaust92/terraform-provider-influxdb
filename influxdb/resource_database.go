@@ -148,7 +148,10 @@ func readDatabase(d *schema.ResourceData, meta interface{}) error {
 	for _, result := range resp.Results[0].Series[0].Values {
 		if result[0] == name {
 			d.Set("name", d.Id())
-			readRetentionPolicies(d, meta)
+			err := readRetentionPolicies(d, meta)
+			if err != nil {
+				return err
+			}
 			return nil
 		}
 	}

@@ -69,7 +69,16 @@ func createContinuousQuery(d *schema.ResourceData, meta interface{}) error {
 
 	d.SetId(fmt.Sprintf("%s:%s", name, database))
 
-	return readContinuousQuery(d, meta)
+	err = readContinuousQuery(d, meta)
+	if err != nil {
+		return err
+	}
+	// check that cq is created
+	if d.Id() == "" {
+		return fmt.Errorf("Unable to create continuous query '%s', check your sql query.", name)
+	}
+
+	return nil
 }
 
 func readContinuousQuery(d *schema.ResourceData, meta interface{}) error {

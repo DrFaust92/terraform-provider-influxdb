@@ -18,8 +18,9 @@ func Provider() *schema.Provider {
 
 		Schema: map[string]*schema.Schema{
 			"url": {
-				Type:     schema.TypeString,
-				Optional: true,
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "Influxdb connection url",
 				DefaultFunc: schema.EnvDefaultFunc(
 					"INFLUXDB_URL", "http://localhost:8086/",
 				),
@@ -27,17 +28,20 @@ func Provider() *schema.Provider {
 			"username": {
 				Type:        schema.TypeString,
 				Optional:    true,
+				Description: "Influxdb user name",
 				DefaultFunc: schema.EnvDefaultFunc("INFLUXDB_USERNAME", ""),
 			},
 			"password": {
 				Type:        schema.TypeString,
 				Optional:    true,
+				Description: "Influxdb password",
 				Sensitive:   true,
 				StateFunc:   hashSum,
 				DefaultFunc: schema.EnvDefaultFunc("INFLUXDB_PASSWORD", ""),
 			},
 			"skip_ssl_verify": {
 				Type:        schema.TypeBool,
+				Description: "skip ssl verify on connection",
 				Optional:    true,
 				DefaultFunc: schema.EnvDefaultFunc("INFLUXDB_SKIP_SSL_VERIFY", "0"),
 			},
@@ -65,6 +69,8 @@ func configure(d *schema.ResourceData) (interface{}, error) {
 		return nil, err
 	}
 
+	// assume that an InfluxBD is already provision when using the InfluxDB provider.
+	// you have to manage dependency between your modules
 	_, _, err = conn.Ping()
 	if err != nil {
 		return nil, fmt.Errorf("error pinging server: %w", err)

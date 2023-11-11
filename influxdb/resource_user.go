@@ -190,9 +190,15 @@ func updateUser(d *schema.ResourceData, meta interface{}) error {
 
 	if d.HasChange("admin") {
 		if !d.Get("admin").(bool) {
-			revokeAllOn(conn, name)
+			err := revokeAllOn(conn, name)
+			if err != nil {
+				return err
+			}
 		} else {
-			grantAllOn(conn, name)
+			err := grantAllOn(conn, name)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -216,10 +222,16 @@ func updateUser(d *schema.ResourceData, meta interface{}) error {
 			}
 
 			if !exists {
-				revokePrivilegeOn(conn, oldGrant["privilege"].(string), oldGrant["database"].(string), name)
+				err := revokePrivilegeOn(conn, oldGrant["privilege"].(string), oldGrant["database"].(string), name)
+				if err != nil {
+					return err
+				}
 			} else {
 				if privilege != oldGrant["privilege"].(string) {
-					grantPrivilegeOn(conn, privilege, oldGrant["database"].(string), name)
+					err := grantPrivilegeOn(conn, privilege, oldGrant["database"].(string), name)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -235,7 +247,10 @@ func updateUser(d *schema.ResourceData, meta interface{}) error {
 			}
 
 			if !exists {
-				grantPrivilegeOn(conn, newGrant["privilege"].(string), newGrant["database"].(string), name)
+				err := grantPrivilegeOn(conn, newGrant["privilege"].(string), newGrant["database"].(string), name)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}

@@ -2,6 +2,9 @@ name: Test suite
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - 'master'
 jobs:
   test:
     name: Run tests
@@ -11,9 +14,14 @@ jobs:
         uses: actions/checkout@v2.3.4
 
       - name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v4
         with:
-          go-version: 1.16
+          go-version: '1.16'
+  
+      - name: flux requirements
+        run: |
+          sudo apt-get install -y clang pkg-config
+          go get github.com/influxdata/pkg-config
 
       - name: Test
         run: make test build
