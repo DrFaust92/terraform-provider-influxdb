@@ -21,7 +21,7 @@ jobs:
       - name: flux requirements
         run: |
           sudo apt-get install -y clang pkg-config
-          go get github.com/influxdata/pkg-config
+          PKG_CONFIG=./pkg-config.sh go get github.com/influxdata/pkg-config
 
       - name: Test
         run: make test build
