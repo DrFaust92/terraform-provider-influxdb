@@ -33,7 +33,9 @@ resource "influxdb_user" "paul" {
 The following arguments are supported:
 
 * `name` - (Required) The name for the user.
-* `password` - (Required) The password for the user.
+* `password` - (Optional) The password for the user. Exactly one of `password` or `password_wo` must be set. Changing it recreates the user. A SHA-256 hash of it is stored in state.
+* `password_wo` - (Optional) Write-only alternative to `password`, never stored in Terraform state or plan output. Requires Terraform 1.11 or later. Conflicts with `password`. See [write-only arguments](https://developer.hashicorp.com/terraform/language/manage-sensitive-data/write-only).
+* `password_wo_version` - (Optional) Required with `password_wo`. Terraform cannot detect changes to write-only values, change this value (e.g. `"2"`) to update the password in place with `SET PASSWORD`.
 * `admin` - (Optional) Mark the user as admin.
 * `grant` - (Optional) A list of grants for non-admin users
 
