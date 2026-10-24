@@ -2,10 +2,14 @@ package influxdb
 
 import (
 	"fmt"
+	"net/url"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 	"github.com/influxdata/influxdb/client"
 )
@@ -292,4 +296,90 @@ resource "influxdb_user" "test" {
   }
 }
 `, rName)
+}
+
+func TestAccInfluxDBUser_writeOnlyPassword(t *testing.T) {
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+	resourceName := "influxdb_user.test"
+	// A quote checks the password is escaped in the InfluxQL string literal.
+	password := "it's-" + acctest.RandString(10)
+	rotated := "rotated-" + acctest.RandString(10)
+
+	resource.Test(t, resource.TestCase{
+		ProviderFactories: map[string]func() (*schema.Provider, error){
+			"influxdb": func() (*schema.Provider, error) { return Provider(), nil },
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: testAccUserConfig_writeOnly(rName, password, "1"),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckUserLogin(rName, password, true),
+					testAccCheckNotInState(password),
+					resource.TestCheckNoResourceAttr(resourceName, "password"),
+					resource.TestCheckResourceAttr(resourceName, "password_wo_version", "1"),
+				),
+			},
+			{
+				// Bumping the version rotates the password in place.
+				Config: testAccUserConfig_writeOnly(rName, rotated, "2"),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckUserLogin(rName, rotated, true),
+					testAccCheckUserLogin(rName, password, false),
+					testAccCheckNotInState(rotated),
+				),
+			},
+		},
+	})
+}
+
+func testAccUserConfig_writeOnly(rName, password, version string) string {
+	return fmt.Sprintf(`
+resource "influxdb_user" "test" {
+  name                = %[1]q
+  password_wo         = %[2]q
+  password_wo_version = %[3]q
+}
+`, rName, password, version)
+}
+
+// testAccCheckUserLogin connects to InfluxDB as the user and checks whether the password works.
+func testAccCheckUserLogin(user, password string, wantOK bool) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		u, err := url.Parse(os.Getenv("INFLUXDB_URL"))
+		if err != nil || u.Host == "" {
+			u, _ = url.Parse("http://localhost:8086/")
+		}
+
+		conn, err := client.NewClient(client.Config{URL: *u, Username: user, Password: password})
+		if err != nil {
+			return err
+		}
+
+		resp, err := conn.Query(client.Query{Command: "SHOW DATABASES"})
+		if err == nil && resp.Err != nil {
+			err = resp.Err
+		}
+
+		if wantOK && err != nil {
+			return fmt.Errorf("login as %q failed: %w", user, err)
+		}
+		if !wantOK && err == nil {
+			return fmt.Errorf("login as %q with the old password unexpectedly succeeded", user)
+		}
+		return nil
+	}
+}
+
+// testAccCheckNotInState fails if the secret, or its hash, appears in any attribute in state.
+func testAccCheckNotInState(secret string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		for name, rs := range s.RootModule().Resources {
+			for k, v := range rs.Primary.Attributes {
+				if strings.Contains(v, secret) || v == hashSum(secret) {
+					return fmt.Errorf("secret found in state: %s.%s", name, k)
+				}
+			}
+		}
+		return nil
+	}
 }

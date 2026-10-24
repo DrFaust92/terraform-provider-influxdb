@@ -10,6 +10,8 @@ import (
 )
 
 func resourceUser() *schema.Resource {
+	passwordWO, passwordWOVersion := writeOnlySchemas("password")
+
 	return &schema.Resource{
 		Create: createUser,
 		Read:   readUser,
@@ -26,12 +28,16 @@ func resourceUser() *schema.Resource {
 				ForceNew: true,
 			},
 			"password": {
-				Type:      schema.TypeString,
-				Required:  true,
-				ForceNew:  true,
-				Sensitive: true,
-				StateFunc: hashSum,
+				Type:         schema.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				Sensitive:    true,
+				StateFunc:    hashSum,
+				ExactlyOneOf: []string{"password", "password_wo"},
 			},
+			// Changing password_wo_version updates the password in place with SET PASSWORD.
+			"password_wo":         passwordWO,
+			"password_wo_version": passwordWOVersion,
 			"admin": {
 				Type:     schema.TypeBool,
 				Optional: true,
@@ -62,7 +68,7 @@ func createUser(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*client.Client)
 
 	name := d.Get("name").(string)
-	password := d.Get("password").(string)
+	password := writeOnlyOrValue(d, "password")
 
 	is_admin := d.Get("admin").(bool)
 	admin_privileges := ""
@@ -70,7 +76,7 @@ func createUser(d *schema.ResourceData, meta interface{}) error {
 		admin_privileges = "WITH ALL PRIVILEGES"
 	}
 
-	queryStr := fmt.Sprintf("CREATE USER %q WITH PASSWORD '%s' %s", name, password, admin_privileges)
+	queryStr := fmt.Sprintf("CREATE USER %q WITH PASSWORD %s %s", name, quoteString(password), admin_privileges)
 	query := client.Query{
 		Command: queryStr,
 	}
@@ -187,6 +193,13 @@ func readGrants(d *schema.ResourceData, meta interface{}) error {
 func updateUser(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*client.Client)
 	name := d.Id()
+
+	if d.HasChange("password_wo_version") {
+		password := writeOnlyOrValue(d, "password")
+		if err := exec(conn, fmt.Sprintf("SET PASSWORD FOR %q = %s", name, quoteString(password))); err != nil {
+			return err
+		}
+	}
 
 	if d.HasChange("admin") {
 		if !d.Get("admin").(bool) {
