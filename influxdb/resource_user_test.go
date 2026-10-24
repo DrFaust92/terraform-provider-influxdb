@@ -166,8 +166,8 @@ func testAccCheckUserExists(n string) resource.TestCheckFunc {
 			return err
 		}
 
-		if resp.Err != nil {
-			return resp.Err
+		if resp.Error() != nil {
+			return resp.Error()
 		}
 
 		for _, result := range resp.Results[0].Series[0].Values {
@@ -202,8 +202,8 @@ func testAccCheckUserNoAdmin(n string) resource.TestCheckFunc {
 			return err
 		}
 
-		if resp.Err != nil {
-			return resp.Err
+		if resp.Error() != nil {
+			return resp.Error()
 		}
 
 		for _, result := range resp.Results[0].Series[0].Values {
@@ -356,8 +356,8 @@ func testAccCheckUserLogin(user, password string, wantOK bool) resource.TestChec
 		}
 
 		resp, err := conn.Query(client.Query{Command: "SHOW DATABASES"})
-		if err == nil && resp.Err != nil {
-			err = resp.Err
+		if err == nil && resp.Error() != nil {
+			err = resp.Error()
 		}
 
 		if wantOK && err != nil {

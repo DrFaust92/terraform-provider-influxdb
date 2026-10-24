@@ -55,6 +55,11 @@ Each `retention_policies` supports the following:
 * `shardgroupduration` - (Optional) Determines how much time each shard group spans. How and why to modify can be found at InfluxDB Documentation. Defaults to `1h0m0s`.
 * `default` - (Optional) Marks current retention policy as default. Default value is `false`.
 
+InfluxDB creates an `autogen` retention policy with every database. It is not tracked while it has
+its default settings and is not in the configuration. To manage it, add a `retention_policies` block
+named `autogen`: the existing policy is then altered instead of created. Removing that block later
+drops the policy.
+
 ## Attributes Reference
 
 * `id` - The name for the database.

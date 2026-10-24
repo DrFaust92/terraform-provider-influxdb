@@ -82,8 +82,9 @@ func TestAccContiuousWithFailureQueryConfig(t *testing.T) {
 			{
 				Config: testAccContiuousQueryWithFailureConfig(rName),
 				// No check function is given because we expect this configuration
-				// to fail before any infrastructure is created
-				ExpectError: regexp.MustCompile("Unable to create continuous query"),
+				// to fail before any infrastructure is created. InfluxDB's own error is
+				// returned, the generic message is the fallback when the query is missing.
+				ExpectError: regexp.MustCompile("retention policy not found|Unable to create continuous query"),
 			},
 		},
 	})
@@ -111,8 +112,8 @@ func testAccCheckContiuousQueryExists(n string) resource.TestCheckFunc {
 			return err
 		}
 
-		if resp.Err != nil {
-			return resp.Err
+		if resp.Error() != nil {
+			return resp.Error()
 		}
 
 		for _, series := range resp.Results[0].Series {

@@ -86,8 +86,8 @@ func exec(conn *client.Client, query string) error {
 	if err != nil {
 		return err
 	}
-	if resp.Err != nil {
-		return resp.Err
+	if resp.Error() != nil {
+		return resp.Error()
 	}
 	return nil
 }
