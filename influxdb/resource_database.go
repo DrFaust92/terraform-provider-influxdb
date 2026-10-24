@@ -75,8 +75,8 @@ func createDatabase(d *schema.ResourceData, meta interface{}) error {
 	if err != nil {
 		return err
 	}
-	if resp.Err != nil {
-		return resp.Err
+	if resp.Error() != nil {
+		return resp.Error()
 	}
 
 	d.SetId(name)
@@ -85,7 +85,7 @@ func createDatabase(d *schema.ResourceData, meta interface{}) error {
 		retentionPolicies := v.(*schema.Set).List()
 		for _, vv := range retentionPolicies {
 			retentionPolicy := vv.(map[string]interface{})
-			if err := createRetentionPolicy(conn, retentionPolicy["name"].(string), retentionPolicy["duration"].(string), retentionPolicy["replication"].(int), retentionPolicy["shardgroupduration"].(string), retentionPolicy["default"].(bool), name); err != nil {
+			if err := upsertRetentionPolicy(conn, retentionPolicy["name"].(string), retentionPolicy["duration"].(string), retentionPolicy["replication"].(int), retentionPolicy["shardgroupduration"].(string), retentionPolicy["default"].(bool), name); err != nil {
 				return err
 			}
 		}
@@ -122,6 +122,41 @@ func updateRetentionPolicy(conn *client.Client, policyName string, duration stri
 	}
 }
 
+// upsertRetentionPolicy creates the retention policy, or alters it if it already exists, e.g. the
+// "autogen" policy InfluxDB creates with every database.
+func upsertRetentionPolicy(conn *client.Client, policyName string, duration string, replication int, shardGroupDuration string, defaultPolicy bool, database string) error {
+	exists, err := retentionPolicyExists(conn, policyName, database)
+	if err != nil {
+		return err
+	}
+
+	if exists {
+		return updateRetentionPolicy(conn, policyName, duration, replication, shardGroupDuration, defaultPolicy, database)
+	}
+
+	return createRetentionPolicy(conn, policyName, duration, replication, shardGroupDuration, defaultPolicy, database)
+}
+
+func retentionPolicyExists(conn *client.Client, policyName string, database string) (bool, error) {
+	resp, err := conn.Query(client.Query{Command: fmt.Sprintf("SHOW RETENTION POLICIES ON %q", database)})
+	if err != nil {
+		return false, err
+	}
+	if resp.Error() != nil {
+		return false, resp.Error()
+	}
+
+	for _, series := range resp.Results[0].Series {
+		for _, values := range series.Values {
+			if len(values) > 0 && values[0] == policyName {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
 func deleteRetentionPolicy(conn *client.Client, policyName string, database string) error {
 	return exec(conn, fmt.Sprintf("DROP RETENTION POLICY %q ON %q", policyName, database))
 }
@@ -141,11 +176,11 @@ func readDatabase(d *schema.ResourceData, meta interface{}) error {
 	if err != nil {
 		return err
 	}
-	if resp.Err != nil {
-		return resp.Err
+	if resp.Error() != nil {
+		return resp.Error()
 	}
 
-	for _, result := range resp.Results[0].Series[0].Values {
+	for _, result := range firstSeriesValues(resp) {
 		if result[0] == name {
 			d.Set("name", d.Id())
 			err := readRetentionPolicies(d, meta)
@@ -175,8 +210,8 @@ func readRetentionPolicies(d *schema.ResourceData, meta interface{}) error {
 		return err
 	}
 
-	if resp.Err != nil {
-		return resp.Err
+	if resp.Error() != nil {
+		return resp.Error()
 	}
 
 	defaultRetentionPolicy := map[string]interface{}{
@@ -187,10 +222,19 @@ func readRetentionPolicies(d *schema.ResourceData, meta interface{}) error {
 		"default":            true,
 	}
 
+	// The default "autogen" policy InfluxDB creates with every database is only tracked once it is
+	// managed, i.e. present in state.
+	managed := map[string]bool{}
+	if v, ok := d.GetOk("retention_policies"); ok {
+		for _, rp := range v.(*schema.Set).List() {
+			managed[rp.(map[string]interface{})["name"].(string)] = true
+		}
+	}
+
 	retentionPolicies := []interface{}{}
 
-	if resp.Results[0].Err == nil {
-		for _, result := range resp.Results[0].Series[0].Values {
+	for _, series := range resp.Results[0].Series {
+		for _, result := range series.Values {
 
 			replication, err := result[3].(json.Number).Int64()
 			if err != nil {
@@ -205,7 +249,7 @@ func readRetentionPolicies(d *schema.ResourceData, meta interface{}) error {
 				"default":            result[4].(bool),
 			}
 
-			if reflect.DeepEqual(retentionPolicy, defaultRetentionPolicy) {
+			if reflect.DeepEqual(retentionPolicy, defaultRetentionPolicy) && !managed["autogen"] {
 				continue
 			}
 
@@ -230,8 +274,8 @@ func deleteDatabase(d *schema.ResourceData, meta interface{}) error {
 	if err != nil {
 		return err
 	}
-	if resp.Err != nil {
-		return resp.Err
+	if resp.Error() != nil {
+		return resp.Error()
 	}
 
 	return nil
@@ -274,7 +318,7 @@ func updateDatabase(d *schema.ResourceData, meta interface{}) error {
 
 			// If policy is not in old map, it has to be created newly, otherwise it has to be updated
 			if !oldRPMap[policyName] {
-				if err := createRetentionPolicy(conn, policyName, newPolicy["duration"].(string), newPolicy["replication"].(int), newPolicy["shardgroupduration"].(string), newPolicy["default"].(bool), name); err != nil {
+				if err := upsertRetentionPolicy(conn, policyName, newPolicy["duration"].(string), newPolicy["replication"].(int), newPolicy["shardgroupduration"].(string), newPolicy["default"].(bool), name); err != nil {
 					return err
 				}
 			} else {

@@ -63,8 +63,8 @@ func createContinuousQuery(d *schema.ResourceData, meta interface{}) error {
 	if err != nil {
 		return err
 	}
-	if resp.Err != nil {
-		return resp.Err
+	if resp.Error() != nil {
+		return resp.Error()
 	}
 
 	d.SetId(fmt.Sprintf("%s:%s", name, database))
@@ -99,8 +99,8 @@ func readContinuousQuery(d *schema.ResourceData, meta interface{}) error {
 	if err != nil {
 		return err
 	}
-	if resp.Err != nil {
-		return resp.Err
+	if resp.Error() != nil {
+		return resp.Error()
 	}
 
 	for _, series := range resp.Results[0].Series {
@@ -136,8 +136,8 @@ func deleteContinuousQuery(d *schema.ResourceData, meta interface{}) error {
 	if err != nil {
 		return err
 	}
-	if resp.Err != nil {
-		return resp.Err
+	if resp.Error() != nil {
+		return resp.Error()
 	}
 
 	return nil

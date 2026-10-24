@@ -85,8 +85,8 @@ func createUser(d *schema.ResourceData, meta interface{}) error {
 	if err != nil {
 		return err
 	}
-	if resp.Err != nil {
-		return resp.Err
+	if resp.Error() != nil {
+		return resp.Error()
 	}
 
 	d.SetId(name)
@@ -135,12 +135,12 @@ func readUser(d *schema.ResourceData, meta interface{}) error {
 	if err != nil {
 		return err
 	}
-	if resp.Err != nil {
-		return resp.Err
+	if resp.Error() != nil {
+		return resp.Error()
 	}
 
 	var found = false
-	for _, result := range resp.Results[0].Series[0].Values {
+	for _, result := range firstSeriesValues(resp) {
 		if result[0] == name {
 			found = true
 			d.Set("name", name)
@@ -172,12 +172,12 @@ func readGrants(d *schema.ResourceData, meta interface{}) error {
 		return err
 	}
 
-	if resp.Err != nil {
-		return resp.Err
+	if resp.Error() != nil {
+		return resp.Error()
 	}
 
 	var grants = []map[string]string{}
-	for _, result := range resp.Results[0].Series[0].Values {
+	for _, result := range firstSeriesValues(resp) {
 		if result[1].(string) != "NO PRIVILEGES" {
 			var grant = map[string]string{
 				"database":  result[0].(string),
@@ -284,8 +284,8 @@ func deleteUser(d *schema.ResourceData, meta interface{}) error {
 	if err != nil {
 		return err
 	}
-	if resp.Err != nil {
-		return resp.Err
+	if resp.Error() != nil {
+		return resp.Error()
 	}
 
 	return nil
