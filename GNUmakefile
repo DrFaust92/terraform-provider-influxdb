@@ -1,4 +1,4 @@
-export TF_ACC_TERRAFORM_VERSION=1.5.0
+export TF_ACC_TERRAFORM_VERSION=1.15.7
 
 TEST?=$$(go list ./... |grep -v 'vendor')
 GOFMT_FILES?=$$(find . -name '*.go' |grep -v vendor)

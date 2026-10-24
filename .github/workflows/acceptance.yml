@@ -1,0 +1,41 @@
+name: Acceptance tests
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - "master"
+permissions:
+  contents: read
+jobs:
+  acceptance:
+    name: Run acceptance tests
+    runs-on: ubuntu-latest
+    services:
+      influxdb:
+        image: influxdb:1.8
+        ports:
+          - 8086:8086
+        env:
+          # Matches INFLUXDB_USERNAME/INFLUXDB_PASSWORD set by `make testacc`.
+          INFLUXDB_HTTP_AUTH_ENABLED: "true"
+          INFLUXDB_ADMIN_USER: test
+          INFLUXDB_ADMIN_PASSWORD: test
+        options: >-
+          --health-cmd "curl -sf http://localhost:8086/ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@v5.2.0
+        with:
+          go-version-file: "go.mod"
+
+      - name: Run acceptance tests
+        env:
+          INFLUXDB_URL: http://localhost:8086/
+        run: make testacc
