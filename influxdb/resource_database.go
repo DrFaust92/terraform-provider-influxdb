@@ -3,6 +3,7 @@ package influxdb
 import (
 	"fmt"
 	"reflect"
+	"slices"
 
 	"encoding/json"
 
@@ -234,19 +235,30 @@ func readRetentionPolicies(d *schema.ResourceData, meta interface{}) error {
 	retentionPolicies := []interface{}{}
 
 	for _, series := range resp.Results[0].Series {
+		// Look columns up by name: InfluxDB 1.12 added futureWriteLimit and
+		// pastWriteLimit before "default", so positions differ between versions.
+		col := map[string]int{}
+		for _, name := range []string{"name", "duration", "shardGroupDuration", "replicaN", "default"} {
+			i := slices.Index(series.Columns, name)
+			if i < 0 {
+				return fmt.Errorf("SHOW RETENTION POLICIES: missing column %q (got %v)", name, series.Columns)
+			}
+			col[name] = i
+		}
+
 		for _, result := range series.Values {
 
-			replication, err := result[3].(json.Number).Int64()
+			replication, err := result[col["replicaN"]].(json.Number).Int64()
 			if err != nil {
 				return err
 			}
 
 			retentionPolicy := map[string]interface{}{
-				"name":               result[0].(string),
-				"duration":           result[1].(string),
-				"shardgroupduration": result[2].(string),
+				"name":               result[col["name"]].(string),
+				"duration":           result[col["duration"]].(string),
+				"shardgroupduration": result[col["shardGroupDuration"]].(string),
 				"replication":        int(replication),
-				"default":            result[4].(bool),
+				"default":            result[col["default"]].(bool),
 			}
 
 			if reflect.DeepEqual(retentionPolicy, defaultRetentionPolicy) && !managed["autogen"] {
