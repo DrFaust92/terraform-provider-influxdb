@@ -3,6 +3,7 @@ package influxdb
 import (
 	"fmt"
 	"net/url"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/influxdata/influxdb/client"
@@ -51,6 +52,10 @@ func Provider() *schema.Provider {
 	}
 }
 
+// httpTimeout bounds each API request so an unresponsive server cannot hang a
+// plan or apply indefinitely.
+const httpTimeout = 2 * time.Minute
+
 func configure(d *schema.ResourceData) (interface{}, error) {
 	url, err := url.Parse(d.Get("url").(string))
 	if err != nil {
@@ -62,6 +67,7 @@ func configure(d *schema.ResourceData) (interface{}, error) {
 		Username:  d.Get("username").(string),
 		Password:  d.Get("password").(string),
 		UnsafeSsl: d.Get("skip_ssl_verify").(bool),
+		Timeout:   httpTimeout,
 	}
 
 	conn, err := client.NewClient(config)
