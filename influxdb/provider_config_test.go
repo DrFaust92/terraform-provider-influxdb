@@ -345,3 +345,34 @@ func TestValidators(t *testing.T) {
 		}
 	}
 }
+
+// The client certificate and timeout can come from the INFLUXDB_*
+// environment variables.
+func TestClientConfig_env(t *testing.T) {
+	clearInfluxEnv(t)
+	ca := newTestCA(t)
+	clientCA := newTestCA(t)
+	srv := newTLSServer(t, ca, clientCA)
+	certPEM, keyPEM := clientCA.issue(t, x509.ExtKeyUsageClientAuth)
+
+	t.Setenv("INFLUXDB_CA_CERTIFICATE", ca.certPEM)
+	t.Setenv("INFLUXDB_CLIENT_CERTIFICATE", certPEM)
+	t.Setenv("INFLUXDB_CLIENT_KEY", keyPEM)
+	t.Setenv("INFLUXDB_TIMEOUT", "45s")
+
+	if err := ping(t, baseModel(srv.URL)); err != nil {
+		t.Fatalf("with the client certificate from the environment: %v", err)
+	}
+	cfg, err := newClientConfig(baseModel(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Timeout != 45*time.Second {
+		t.Fatalf("INFLUXDB_TIMEOUT: timeout = %s, want 45s", cfg.Timeout)
+	}
+
+	t.Setenv("INFLUXDB_TIMEOUT", "soon")
+	if _, err := newClientConfig(baseModel(srv.URL)); err == nil {
+		t.Fatal("expected an error for an invalid INFLUXDB_TIMEOUT")
+	}
+}

@@ -12,7 +12,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/providervalidator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -27,7 +29,10 @@ const defaultTimeout = 2 * time.Minute
 
 const defaultURL = "http://localhost:8086/"
 
-var _ provider.Provider = &influxdbProvider{}
+var (
+	_ provider.Provider                     = &influxdbProvider{}
+	_ provider.ProviderWithConfigValidators = &influxdbProvider{}
+)
 
 type influxdbProvider struct {
 	version string
@@ -84,7 +89,7 @@ func (p *influxdbProvider) Schema(_ context.Context, _ provider.SchemaRequest, r
 			},
 			"client_certificate": schema.StringAttribute{
 				Optional:    true,
-				Description: "PEM-encoded client certificate for servers that require TLS client authentication. Requires `client_key`. Can also be set with the `INFLUXDB_CLIENT_CERTIFICATE` environment variable.",
+				Description: "PEM-encoded client certificate, for a server that requires TLS client authentication. InfluxDB 1.x does not request client certificates itself; use this with a TLS proxy or load balancer in front of it that does. Set it together with `client_key`, both in the configuration or both in environment variables. Can also be set with the `INFLUXDB_CLIENT_CERTIFICATE` environment variable.",
 				Validators:  []validator.String{pemCertificateValidator{}},
 			},
 			"client_key": schema.StringAttribute{
@@ -98,6 +103,12 @@ func (p *influxdbProvider) Schema(_ context.Context, _ provider.SchemaRequest, r
 				Validators:  []validator.String{durationValidator{}},
 			},
 		},
+	}
+}
+
+func (p *influxdbProvider) ConfigValidators(context.Context) []provider.ConfigValidator {
+	return []provider.ConfigValidator{
+		providervalidator.RequiredTogether(path.MatchRoot("client_certificate"), path.MatchRoot("client_key")),
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
+	"github.com/hashicorp/terraform-plugin-testing/tfversion"
 )
 
 // Upgrade tests apply a configuration with the last terraform-plugin-sdk
@@ -77,7 +78,8 @@ func TestAccInfluxDBUser_upgradeFromSDKv2WriteOnly(t *testing.T) {
 	password := "it's-" + acctest.RandString(10)
 
 	resource.Test(t, resource.TestCase{
-		Steps: testAccUpgradeSteps(testAccUserConfig_writeOnlyWithGrant(rName, password, "1"), testAccCheckUserLogin(rName, password, true)),
+		TerraformVersionChecks: []tfversion.TerraformVersionCheck{tfversion.SkipBelow(tfversion.Version1_11_0)},
+		Steps:                  testAccUpgradeSteps(testAccUserConfig_writeOnlyWithGrant(rName, password, "1"), testAccCheckUserLogin(rName, password, true)),
 	})
 }
 

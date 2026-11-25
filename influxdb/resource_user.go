@@ -70,6 +70,8 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 				Optional:    true,
 				Sensitive:   true,
 				Description: "Password of the user. Changing it re-creates the user; use `password_wo` to rotate the password in place. Exactly one of `password` and `password_wo` must be set.",
+				// Warns on Terraform 1.11+, which supports password_wo.
+				Validators: []validator.String{stringvalidator.PreferWriteOnlyAttribute(path.MatchRoot("password_wo"))},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplaceIf(passwordRequiresReplace,
 						"Changing the password re-creates the user.",

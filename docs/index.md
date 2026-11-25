@@ -48,7 +48,7 @@ provider "influxdb" {
 ### Optional
 
 - `ca_certificate` (String) PEM-encoded CA certificates used to verify the server certificate, instead of the system roots. Can also be set with the `INFLUXDB_CA_CERTIFICATE` environment variable.
-- `client_certificate` (String) PEM-encoded client certificate for servers that require TLS client authentication. Requires `client_key`. Can also be set with the `INFLUXDB_CLIENT_CERTIFICATE` environment variable.
+- `client_certificate` (String) PEM-encoded client certificate, for a server that requires TLS client authentication. InfluxDB 1.x does not request client certificates itself; use this with a TLS proxy or load balancer in front of it that does. Set it together with `client_key`, both in the configuration or both in environment variables. Can also be set with the `INFLUXDB_CLIENT_CERTIFICATE` environment variable.
 - `client_key` (String, Sensitive) PEM-encoded private key of `client_certificate`. Can also be set with the `INFLUXDB_CLIENT_KEY` environment variable.
 - `password` (String, Sensitive) InfluxDB password. Can also be set with the `INFLUXDB_PASSWORD` environment variable.
 - `skip_ssl_verify` (Boolean) Skip TLS certificate verification. Can also be set with the `INFLUXDB_SKIP_SSL_VERIFY` environment variable. Prefer `ca_certificate` for servers with a private CA.
