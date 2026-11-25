@@ -14,3 +14,14 @@ provider "influxdb" {
   username = "terraform"
   password = var.influxdb_password
 }
+
+# A server with a private CA that requires client certificates. Requests
+# also go through the proxy in HTTPS_PROXY, unless NO_PROXY excludes the host.
+provider "influxdb" {
+  alias              = "tls"
+  url                = "https://influxdb.internal:8086/"
+  ca_certificate     = file("${path.module}/ca.pem")
+  client_certificate = file("${path.module}/client.pem")
+  client_key         = file("${path.module}/client-key.pem")
+  timeout            = "5m"
+}
