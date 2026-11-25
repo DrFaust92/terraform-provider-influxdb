@@ -7,10 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/acctest"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
+	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/influxdata/influxdb/client"
 )
 
@@ -19,7 +18,7 @@ func TestAccInfluxDBUser_admin(t *testing.T) {
 
 	resourceName := "influxdb_user.test"
 	resource.Test(t, resource.TestCase{
-		Providers: testAccProviders,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccUserConfig_admin(rName),
@@ -57,7 +56,7 @@ func TestAccInfluxDBUser_grant(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
 	resource.Test(t, resource.TestCase{
-		Providers: testAccProviders,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccUserConfig_grant(rName),
@@ -109,7 +108,7 @@ func TestAccInfluxDBUser_revoke(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
 	resource.Test(t, resource.TestCase{
-		Providers: testAccProviders,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccUserConfig_grant(rName),
@@ -155,7 +154,10 @@ func testAccCheckUserExists(n string) resource.TestCheckFunc {
 			return fmt.Errorf("No user id set")
 		}
 
-		conn := testAccProvider.Meta().(*client.Client)
+		conn, err := testAccClient()
+		if err != nil {
+			return err
+		}
 
 		query := client.Query{
 			Command: "SHOW USERS",
@@ -191,7 +193,10 @@ func testAccCheckUserNoAdmin(n string) resource.TestCheckFunc {
 			return fmt.Errorf("No user id set")
 		}
 
-		conn := testAccProvider.Meta().(*client.Client)
+		conn, err := testAccClient()
+		if err != nil {
+			return err
+		}
 
 		query := client.Query{
 			Command: "SHOW USERS",
@@ -306,9 +311,7 @@ func TestAccInfluxDBUser_writeOnlyPassword(t *testing.T) {
 	rotated := "rotated-" + acctest.RandString(10)
 
 	resource.Test(t, resource.TestCase{
-		ProviderFactories: map[string]func() (*schema.Provider, error){
-			"influxdb": func() (*schema.Provider, error) { return Provider(), nil },
-		},
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccUserConfig_writeOnly(rName, password, "1"),

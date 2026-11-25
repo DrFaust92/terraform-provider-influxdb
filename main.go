@@ -1,11 +1,27 @@
 package main
 
 import (
-	"github.com/hashicorp/terraform-plugin-sdk/v2/plugin"
+	"context"
+	"flag"
+	"log"
+
+	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/terraform-providers/terraform-provider-influxdb/influxdb"
 )
 
+// version is set by GoReleaser.
+var version = "dev"
+
 func main() {
-	plugin.Serve(&plugin.ServeOpts{
-		ProviderFunc: influxdb.Provider})
+	var debug bool
+	flag.BoolVar(&debug, "debug", false, "run the provider with support for debuggers like delve")
+	flag.Parse()
+
+	err := providerserver.Serve(context.Background(), influxdb.New(version), providerserver.ServeOpts{
+		Address: "registry.terraform.io/DrFaust92/influxdb",
+		Debug:   debug,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 }

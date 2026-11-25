@@ -7,10 +7,9 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/acctest"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
+	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/influxdata/influxdb/client"
 )
 
@@ -19,7 +18,7 @@ func TestAccInfluxDBDatabase_basic(t *testing.T) {
 
 	resourceName := "influxdb_database.test"
 	resource.Test(t, resource.TestCase{
-		Providers: testAccProviders,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccDatabaseConfig(rName),
@@ -43,7 +42,7 @@ func TestAccInfluxDBDatabase_retention(t *testing.T) {
 
 	resourceName := "influxdb_database.test"
 	resource.Test(t, resource.TestCase{
-		Providers: testAccProviders,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccDatabaseWithRPSConfig(rName),
@@ -102,7 +101,10 @@ func testAccCheckDatabaseExists(n string) resource.TestCheckFunc {
 			return fmt.Errorf("No database id set")
 		}
 
-		conn := testAccProvider.Meta().(*client.Client)
+		conn, err := testAccClient()
+		if err != nil {
+			return err
+		}
 
 		query := client.Query{
 			Command: "SHOW DATABASES",
@@ -181,9 +183,7 @@ func TestAccInfluxDBDatabase_defaultRetentionPolicy(t *testing.T) {
 	resourceName := "influxdb_database.test"
 
 	resource.Test(t, resource.TestCase{
-		ProviderFactories: map[string]func() (*schema.Provider, error){
-			"influxdb": func() (*schema.Provider, error) { return Provider(), nil },
-		},
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccDatabaseConfig(rName),
@@ -261,4 +261,40 @@ func testAccCheckRetentionPolicyDuration(database, policy, want string) resource
 
 		return fmt.Errorf("retention policy %q not found on %q", policy, database)
 	}
+}
+
+// InfluxDB reports durations in normal form (1d as 24h0m0s); the configured
+// spelling is kept so there is no diff.
+func TestAccInfluxDBDatabase_durationSpelling(t *testing.T) {
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+	resourceName := "influxdb_database.test"
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+resource "influxdb_database" "test" {
+  name = %[1]q
+
+  retention_policies {
+    name               = "1day"
+    duration           = "1d"
+    shardgroupduration = "1h"
+  }
+}
+`, rName),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckRetentionPolicyDuration(rName, "1day", "24h0m0s"),
+					resource.TestCheckTypeSetElemNestedAttrs(resourceName, "retention_policies.*", map[string]string{
+						"name":               "1day",
+						"duration":           "1d",
+						"shardgroupduration": "1h",
+						"replication":        "1",
+						"default":            "false",
+					}),
+				),
+			},
+		},
+	})
 }

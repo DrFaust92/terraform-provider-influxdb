@@ -29,6 +29,8 @@ The provider configuration block accepts the following arguments:
   considers insecure server connections. May alternatively be set via the
   environment (i.e., ``INFLUXDB_SKIP_SSL_VERIFY=1``)
 
+The provider supports InfluxDB 1.x and requires Terraform 1.0 or later.
+
 Use the navigation to the left to read about the available resources.
 
 ## Example Usage

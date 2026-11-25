@@ -5,9 +5,9 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/acctest"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
+	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/influxdata/influxdb/client"
 )
 
@@ -16,7 +16,7 @@ func TestAccInfluxDBContiuousQuery_basic(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
 	resource.Test(t, resource.TestCase{
-		Providers: testAccProviders,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccContiuousQueryBasicConfig(rName),
@@ -36,7 +36,7 @@ func TestAccInfluxDBContiuousQuery_resample(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
 	resource.Test(t, resource.TestCase{
-		Providers: testAccProviders,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccContiuousQueryResampleConfig(rName),
@@ -57,7 +57,7 @@ func TestAccContiuousQueryConfig(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
 	resource.Test(t, resource.TestCase{
-		Providers: testAccProviders,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccContiuousQueryConfig(rName),
@@ -77,7 +77,7 @@ func TestAccContiuousWithFailureQueryConfig(t *testing.T) {
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
 	resource.Test(t, resource.TestCase{
-		Providers: testAccProviders,
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccContiuousQueryWithFailureConfig(rName),
@@ -101,7 +101,10 @@ func testAccCheckContiuousQueryExists(n string) resource.TestCheckFunc {
 			return fmt.Errorf("No ContiuousQuery id set")
 		}
 
-		conn := testAccProvider.Meta().(*client.Client)
+		conn, err := testAccClient()
+		if err != nil {
+			return err
+		}
 
 		query := client.Query{
 			Command: "SHOW CONTINUOUS QUERIES",
