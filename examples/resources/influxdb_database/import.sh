@@ -1,0 +1,1 @@
+terraform import influxdb_database.example example

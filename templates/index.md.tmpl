@@ -1,0 +1,17 @@
+---
+page_title: "Provider: InfluxDB"
+description: |-
+  Manage InfluxDB 1.x databases, retention policies, users and continuous queries.
+---
+
+# InfluxDB Provider
+
+Manages [InfluxDB](https://www.influxdata.com/) 1.x databases, retention policies, users and continuous queries. Tested against InfluxDB 1.11 and 1.12. InfluxDB 2.x and 3.x are not supported.
+
+Requires Terraform 1.0 or later.
+
+## Example Usage
+
+{{ tffile "examples/provider/provider.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
