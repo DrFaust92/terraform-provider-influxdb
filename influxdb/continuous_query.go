@@ -1,149 +1,191 @@
 package influxdb
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/influxdata/influxdb/client"
 )
 
-func resourceContinuousQuery() *schema.Resource {
-	return &schema.Resource{
-		Create: createContinuousQuery,
-		Read:   readContinuousQuery,
-		Delete: deleteContinuousQuery,
+var (
+	_ resource.Resource              = &continuousQueryResource{}
+	_ resource.ResourceWithConfigure = &continuousQueryResource{}
+)
 
-		Schema: map[string]*schema.Schema{
-			"name": {
-				Type:     schema.TypeString,
-				Required: true,
-				ForceNew: true,
+func newContinuousQueryResource() resource.Resource {
+	return &continuousQueryResource{}
+}
+
+type continuousQueryResource struct {
+	conn *client.Client
+}
+
+type continuousQueryModel struct {
+	ID       types.String `tfsdk:"id"`
+	Name     types.String `tfsdk:"name"`
+	Database types.String `tfsdk:"database"`
+	Query    types.String `tfsdk:"query"`
+	Resample types.String `tfsdk:"resample"`
+}
+
+func (r *continuousQueryResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_continuous_query"
+}
+
+func (r *continuousQueryResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+	replace := []planmodifier.String{stringplanmodifier.RequiresReplace()}
+
+	resp.Schema = schema.Schema{
+		Description: "Manages an InfluxDB continuous query. Any change re-creates the query.",
+		Attributes: map[string]schema.Attribute{
+			"id": schema.StringAttribute{
+				Computed:      true,
+				Description:   "`<name>:<database>`.",
+				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			"database": {
-				Type:     schema.TypeString,
-				Required: true,
-				ForceNew: true,
+			"name": schema.StringAttribute{
+				Required:      true,
+				Description:   "Name of the continuous query.",
+				PlanModifiers: replace,
 			},
-			"query": {
-				Type:     schema.TypeString,
-				Required: true,
-				ForceNew: true,
+			"database": schema.StringAttribute{
+				Required:      true,
+				Description:   "Database the continuous query runs on.",
+				PlanModifiers: replace,
 			},
-			"resample": {
-				Type:     schema.TypeString,
-				Optional: true,
-				ForceNew: true,
-				Default:  "",
+			"query": schema.StringAttribute{
+				Required:      true,
+				Description:   "The `SELECT` statement of the continuous query.",
+				PlanModifiers: replace,
+			},
+			"resample": schema.StringAttribute{
+				Optional:      true,
+				Computed:      true,
+				Default:       stringdefault.StaticString(""),
+				Description:   "Optional `RESAMPLE` clause, e.g. `EVERY 30m FOR 90m`.",
+				PlanModifiers: replace,
 			},
 		},
 	}
 }
 
-func createContinuousQuery(d *schema.ResourceData, meta interface{}) error {
-	conn := meta.(*client.Client)
-
-	name := d.Get("name").(string)
-	database := d.Get("database").(string)
-	resample := d.Get("resample").(string)
-	quer := d.Get("query").(string)
-
-	var queryStr string
-	if resample == "" {
-		queryStr = fmt.Sprintf("CREATE CONTINUOUS QUERY %q ON %q BEGIN %s END", name, database, quer)
-	} else {
-		queryStr = fmt.Sprintf("CREATE CONTINUOUS QUERY %q ON %q RESAMPLE %s BEGIN %s END", name, database, resample, quer)
-	}
-
-	query := client.Query{
-		Command: queryStr,
-	}
-
-	resp, err := conn.Query(query)
+func (r *continuousQueryResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+	conn, err := clientFromProviderData(req.ProviderData)
 	if err != nil {
-		return err
+		resp.Diagnostics.AddError("Unexpected provider data", err.Error())
+		return
 	}
-	if resp.Error() != nil {
-		return resp.Error()
-	}
-
-	d.SetId(fmt.Sprintf("%s:%s", name, database))
-
-	err = readContinuousQuery(d, meta)
-	if err != nil {
-		return err
-	}
-	// check that cq is created
-	if d.Id() == "" {
-		return fmt.Errorf("Unable to create continuous query '%s', check your sql query.", name)
-	}
-
-	return nil
+	r.conn = conn
 }
 
-func readContinuousQuery(d *schema.ResourceData, meta interface{}) error {
-	conn := meta.(*client.Client)
-	name, database, err := continuousQueryId(d.Id())
-	if err != nil {
-		return err
+func (r *continuousQueryResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan continuousQueryModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
-	// InfluxDB doesn't have a command to check the existence of a single
-	// ContinuousQuery, so we instead must read the list of all ContinuousQuerys and see
-	// if ours is present in it.
-	query := client.Query{
-		Command: "SHOW CONTINUOUS QUERIES",
+	name := plan.Name.ValueString()
+	database := plan.Database.ValueString()
+
+	resample := ""
+	if s := plan.Resample.ValueString(); s != "" {
+		resample = " RESAMPLE " + s
 	}
 
-	resp, err := conn.Query(query)
-	if err != nil {
-		return err
+	if err := exec(r.conn, fmt.Sprintf("CREATE CONTINUOUS QUERY %q ON %q%s BEGIN %s END", name, database, resample, plan.Query.ValueString())); err != nil {
+		resp.Diagnostics.AddError("Unable to create continuous query", err.Error())
+		return
 	}
-	if resp.Error() != nil {
-		return resp.Error()
+
+	exists, err := continuousQueryExists(r.conn, name, database)
+	if err != nil {
+		resp.Diagnostics.AddError("Unable to read continuous queries", err.Error())
+		return
+	}
+	if !exists {
+		resp.Diagnostics.AddError("Unable to create continuous query", fmt.Sprintf("Unable to create continuous query '%s', check your sql query.", name))
+		return
+	}
+
+	plan.ID = types.StringValue(fmt.Sprintf("%s:%s", name, database))
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+}
+
+func (r *continuousQueryResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state continuousQueryModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	name, database, err := continuousQueryID(state.ID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid continuous query ID", err.Error())
+		return
+	}
+
+	exists, err := continuousQueryExists(r.conn, name, database)
+	if err != nil {
+		resp.Diagnostics.AddError("Unable to read continuous queries", err.Error())
+		return
+	}
+	if !exists {
+		resp.State.RemoveResource(ctx)
+		return
+	}
+
+	state.Name = types.StringValue(name)
+	state.Database = types.StringValue(database)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// Update is never called: every attribute requires replacement.
+func (r *continuousQueryResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	resp.Diagnostics.AddError("Continuous queries cannot be updated", "Every change re-creates the continuous query.")
+}
+
+func (r *continuousQueryResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state continuousQueryModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if err := exec(r.conn, fmt.Sprintf("DROP CONTINUOUS QUERY %q ON %q", state.Name.ValueString(), state.Database.ValueString())); err != nil {
+		resp.Diagnostics.AddError("Unable to drop continuous query", err.Error())
+	}
+}
+
+func continuousQueryExists(conn *client.Client, name, database string) (bool, error) {
+	// InfluxDB has no command to check for a single continuous query, so the
+	// list of all continuous queries is searched.
+	resp, err := queryResponse(conn, "SHOW CONTINUOUS QUERIES")
+	if err != nil {
+		return false, err
 	}
 
 	for _, series := range resp.Results[0].Series {
-		if series.Name == database {
-			for _, result := range series.Values {
-				if result[0].(string) == name {
-					d.Set("name", name)
-					d.Set("database", database)
-
-					return nil
-				}
+		if series.Name != database {
+			continue
+		}
+		for _, row := range series.Values {
+			if row[0] == name {
+				return true, nil
 			}
 		}
 	}
-
-	// If we fell out here then we didn't find our ContinuousQuery in the list.
-	d.SetId("")
-
-	return nil
+	return false, nil
 }
 
-func deleteContinuousQuery(d *schema.ResourceData, meta interface{}) error {
-	conn := meta.(*client.Client)
-	name := d.Get("name").(string)
-	database := d.Get("database").(string)
-
-	queryStr := fmt.Sprintf("DROP CONTINUOUS QUERY %q ON %q", name, database)
-	query := client.Query{
-		Command: queryStr,
-	}
-
-	resp, err := conn.Query(query)
-	if err != nil {
-		return err
-	}
-	if resp.Error() != nil {
-		return resp.Error()
-	}
-
-	return nil
-}
-
-func continuousQueryId(id string) (string, string, error) {
+func continuousQueryID(id string) (string, string, error) {
 	parts := strings.SplitN(id, ":", 2)
 
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {

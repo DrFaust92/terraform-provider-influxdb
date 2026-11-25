@@ -23,7 +23,7 @@ resource "influxdb_user" "paul" {
 
     grant {
       database = "${influxdb_database.green.name}"
-      privilege = "write"
+      privilege = "WRITE"
     }
 }
 ```
@@ -33,7 +33,9 @@ resource "influxdb_user" "paul" {
 The following arguments are supported:
 
 * `name` - (Required) The name for the user.
-* `password` - (Optional) The password for the user. Exactly one of `password` or `password_wo` must be set. Changing it recreates the user. A SHA-256 hash of it is stored in state.
+* `password` - (Optional) The password for the user. Exactly one of `password` or `password_wo` must be set. Changing it recreates the user. It is stored in state (marked sensitive); use `password_wo` to keep it out of state.
+
+  ~> **Upgrading from 1.x:** 1.x releases stored a SHA-256 hash of `password` in state. The first plan after upgrading shows an in-place update of `password`; applying it only replaces the hash with the password in state and does not change the password on the server.
 * `password_wo` - (Optional) Write-only alternative to `password`, never stored in Terraform state or plan output. Requires Terraform 1.11 or later. Conflicts with `password`. See [write-only arguments](https://developer.hashicorp.com/terraform/language/manage-sensitive-data/write-only).
 * `password_wo_version` - (Optional) Required with `password_wo`. Terraform cannot detect changes to write-only values, change this value (e.g. `"2"`) to update the password in place with `SET PASSWORD`.
 * `admin` - (Optional) Mark the user as admin.

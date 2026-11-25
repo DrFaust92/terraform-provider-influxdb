@@ -1,60 +1,103 @@
 package influxdb
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
-	"reflect"
 	"slices"
 
-	"encoding/json"
-
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/influxdata/influxdb/client"
 )
 
-func resourceDatabase() *schema.Resource {
-	return &schema.Resource{
-		Create: createDatabase,
-		Read:   readDatabase,
-		Delete: deleteDatabase,
-		Update: updateDatabase,
-		Importer: &schema.ResourceImporter{
-			StateContext: schema.ImportStatePassthroughContext,
-		},
+var (
+	_ resource.Resource                = &databaseResource{}
+	_ resource.ResourceWithConfigure   = &databaseResource{}
+	_ resource.ResourceWithImportState = &databaseResource{}
+	_ resource.ResourceWithModifyPlan  = &databaseResource{}
+)
 
-		Schema: map[string]*schema.Schema{
-			"name": {
-				Type:     schema.TypeString,
-				Required: true,
-				ForceNew: true,
+// Retention policy defaults. They are applied in ModifyPlan rather than with
+// schema defaults, which the framework does not support inside set elements.
+const (
+	defaultReplication        = 1
+	defaultShardGroupDuration = "1h0m0s"
+)
+
+func newDatabaseResource() resource.Resource {
+	return &databaseResource{}
+}
+
+type databaseResource struct {
+	conn *client.Client
+}
+
+type databaseModel struct {
+	ID                types.String           `tfsdk:"id"`
+	Name              types.String           `tfsdk:"name"`
+	RetentionPolicies []retentionPolicyModel `tfsdk:"retention_policies"`
+}
+
+type retentionPolicyModel struct {
+	Name               types.String `tfsdk:"name"`
+	Duration           types.String `tfsdk:"duration"`
+	Replication        types.Int64  `tfsdk:"replication"`
+	ShardGroupDuration types.String `tfsdk:"shardgroupduration"`
+	Default            types.Bool   `tfsdk:"default"`
+}
+
+func (r *databaseResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_database"
+}
+
+func (r *databaseResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		Description: "Manages an InfluxDB database and its retention policies.",
+		Attributes: map[string]schema.Attribute{
+			"id": schema.StringAttribute{
+				Computed:      true,
+				Description:   "The database name.",
+				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			"retention_policies": {
-				Type:     schema.TypeSet,
-				Optional: true,
-				ForceNew: false,
-				Elem: &schema.Resource{
-					Schema: map[string]*schema.Schema{
-						"name": {
-							Type:     schema.TypeString,
-							Required: true,
+			"name": schema.StringAttribute{
+				Required:      true,
+				Description:   "Name of the database.",
+				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
+			},
+		},
+		Blocks: map[string]schema.Block{
+			"retention_policies": schema.SetNestedBlock{
+				Description: "Retention policies of the database. The `autogen` policy InfluxDB creates with every database is only managed when it is listed here.",
+				NestedObject: schema.NestedBlockObject{
+					Attributes: map[string]schema.Attribute{
+						"name": schema.StringAttribute{
+							Required:    true,
+							Description: "Name of the retention policy.",
 						},
-						"duration": {
-							Type:     schema.TypeString,
-							Required: true,
+						"duration": schema.StringAttribute{
+							Required:    true,
+							Description: "How long data is kept, e.g. `24h0m0s`. `0s` keeps data forever.",
 						},
-						"replication": {
-							Type:     schema.TypeInt,
-							Optional: true,
-							Default:  1,
+						"replication": schema.Int64Attribute{
+							Optional:    true,
+							Computed:    true,
+							Description: "Replication factor. Defaults to `1`.",
 						},
-						"shardgroupduration": {
-							Type:     schema.TypeString,
-							Optional: true,
-							Default:  "1h0m0s",
+						"shardgroupduration": schema.StringAttribute{
+							Optional:    true,
+							Computed:    true,
+							Description: "Shard group duration. Defaults to `1h0m0s`.",
 						},
-						"default": {
-							Type:     schema.TypeBool,
-							Optional: true,
-							Default:  false,
+						"default": schema.BoolAttribute{
+							Optional:    true,
+							Computed:    true,
+							Description: "Whether this is the default retention policy of the database. Defaults to `false`.",
 						},
 					},
 				},
@@ -63,176 +106,233 @@ func resourceDatabase() *schema.Resource {
 	}
 }
 
-func createDatabase(d *schema.ResourceData, meta interface{}) error {
-	conn := meta.(*client.Client)
-
-	name := d.Get("name").(string)
-	queryStr := fmt.Sprintf("CREATE DATABASE %q", name)
-	query := client.Query{
-		Command: queryStr,
+// ModifyPlan plans the retention policies from configuration with the
+// defaults filled in, so set elements are fully known.
+func (r *databaseResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() {
+		return
 	}
 
-	resp, err := conn.Query(query)
+	var rps []retentionPolicyModel
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("retention_policies"), &rps)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	for i := range rps {
+		if rps[i].Replication.IsNull() {
+			rps[i].Replication = types.Int64Value(defaultReplication)
+		}
+		if rps[i].ShardGroupDuration.IsNull() {
+			rps[i].ShardGroupDuration = types.StringValue(defaultShardGroupDuration)
+		}
+		if rps[i].Default.IsNull() {
+			rps[i].Default = types.BoolValue(false)
+		}
+	}
+	if rps == nil {
+		rps = []retentionPolicyModel{}
+	}
+
+	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("retention_policies"), rps)...)
+}
+
+func (r *databaseResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+	conn, err := clientFromProviderData(req.ProviderData)
 	if err != nil {
-		return err
+		resp.Diagnostics.AddError("Unexpected provider data", err.Error())
+		return
 	}
-	if resp.Error() != nil {
-		return resp.Error()
+	r.conn = conn
+}
+
+func (r *databaseResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan databaseModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
-	d.SetId(name)
+	name := plan.Name.ValueString()
+	if err := exec(r.conn, fmt.Sprintf("CREATE DATABASE %q", name)); err != nil {
+		resp.Diagnostics.AddError("Unable to create database", err.Error())
+		return
+	}
 
-	if v, ok := d.GetOk("retention_policies"); ok {
-		retentionPolicies := v.(*schema.Set).List()
-		for _, vv := range retentionPolicies {
-			retentionPolicy := vv.(map[string]interface{})
-			if err := upsertRetentionPolicy(conn, retentionPolicy["name"].(string), retentionPolicy["duration"].(string), retentionPolicy["replication"].(int), retentionPolicy["shardgroupduration"].(string), retentionPolicy["default"].(bool), name); err != nil {
-				return err
+	for _, rp := range plan.RetentionPolicies {
+		if err := upsertRetentionPolicy(r.conn, rp, name); err != nil {
+			resp.Diagnostics.AddError("Unable to create retention policy", err.Error())
+			return
+		}
+	}
+
+	plan.ID = types.StringValue(name)
+	r.readInto(ctx, &plan, plan.RetentionPolicies, resp.State.Set, &resp.Diagnostics)
+}
+
+func (r *databaseResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state databaseModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	exists, err := databaseExists(r.conn, state.ID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Unable to read databases", err.Error())
+		return
+	}
+	if !exists {
+		resp.State.RemoveResource(ctx)
+		return
+	}
+
+	r.readInto(ctx, &state, state.RetentionPolicies, resp.State.Set, &resp.Diagnostics)
+}
+
+func (r *databaseResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan, state databaseModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	name := plan.Name.ValueString()
+
+	oldRPs := map[string]bool{}
+	for _, rp := range state.RetentionPolicies {
+		oldRPs[rp.Name.ValueString()] = true
+	}
+	newRPs := map[string]bool{}
+	for _, rp := range plan.RetentionPolicies {
+		newRPs[rp.Name.ValueString()] = true
+	}
+
+	// Policies no longer configured are dropped.
+	for _, rp := range state.RetentionPolicies {
+		if !newRPs[rp.Name.ValueString()] {
+			if err := exec(r.conn, fmt.Sprintf("DROP RETENTION POLICY %q ON %q", rp.Name.ValueString(), name)); err != nil {
+				resp.Diagnostics.AddError("Unable to drop retention policy", err.Error())
+				return
 			}
 		}
 	}
 
-	return readDatabase(d, meta)
+	// New policies are created (or altered if they already exist, e.g.
+	// autogen); existing ones are altered.
+	for _, rp := range plan.RetentionPolicies {
+		var err error
+		if oldRPs[rp.Name.ValueString()] {
+			err = retentionPolicyStatement(r.conn, "ALTER", rp, name)
+		} else {
+			err = upsertRetentionPolicy(r.conn, rp, name)
+		}
+		if err != nil {
+			resp.Diagnostics.AddError("Unable to update retention policy", err.Error())
+			return
+		}
+	}
+
+	plan.ID = types.StringValue(name)
+	r.readInto(ctx, &plan, plan.RetentionPolicies, resp.State.Set, &resp.Diagnostics)
 }
 
-func createRetentionPolicy(conn *client.Client, policyName string, duration string, replication int, shardGroupDuration string, defaultPolicy bool, database string) error {
-	var shardDuration string
-
-	if shardGroupDuration != "" {
-		shardDuration = fmt.Sprintf("SHARD DURATION %s ", shardGroupDuration)
+func (r *databaseResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state databaseModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
-	if defaultPolicy {
-		return exec(conn, fmt.Sprintf("CREATE RETENTION POLICY %q ON %q DURATION %s REPLICATION %d %s DEFAULT", policyName, database, duration, replication, shardDuration))
-	} else {
-		return exec(conn, fmt.Sprintf("CREATE RETENTION POLICY %q ON %q DURATION %s REPLICATION %d %s", policyName, database, duration, replication, shardDuration))
+	if err := exec(r.conn, fmt.Sprintf("DROP DATABASE %q", state.ID.ValueString())); err != nil {
+		resp.Diagnostics.AddError("Unable to drop database", err.Error())
 	}
 }
 
-func updateRetentionPolicy(conn *client.Client, policyName string, duration string, replication int, shardGroupDuration string, defaultPolicy bool, database string) error {
-	var shardDuration string
+func (r *databaseResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), req.ID)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("retention_policies"), []retentionPolicyModel{})...)
+}
 
-	if shardGroupDuration != "" {
-		shardDuration = fmt.Sprintf("SHARD DURATION %s ", shardGroupDuration)
+// readInto reads the retention policies of the database in m from the server
+// and stores m with set. prior holds the configured or previously stored
+// policies; their duration strings are kept when the server reports the same
+// duration in another form.
+func (r *databaseResource) readInto(ctx context.Context, m *databaseModel, prior []retentionPolicyModel, set func(context.Context, any) diag.Diagnostics, diags *diag.Diagnostics) {
+	rps, err := readRetentionPolicies(r.conn, m.ID.ValueString(), prior)
+	if err != nil {
+		diags.AddError("Unable to read retention policies", err.Error())
+		return
 	}
 
-	if defaultPolicy {
-		return exec(conn, fmt.Sprintf("ALTER RETENTION POLICY %q ON %q DURATION %s REPLICATION %d %s DEFAULT", policyName, database, duration, replication, shardDuration))
-	} else {
-		return exec(conn, fmt.Sprintf("ALTER RETENTION POLICY %q ON %q DURATION %s REPLICATION %d %s", policyName, database, duration, replication, shardDuration))
+	m.Name = m.ID
+	m.RetentionPolicies = rps
+	diags.Append(set(ctx, m)...)
+}
+
+func databaseExists(conn *client.Client, name string) (bool, error) {
+	// InfluxDB has no command to check for a single database, so the list of
+	// all databases is searched.
+	resp, err := queryResponse(conn, "SHOW DATABASES")
+	if err != nil {
+		return false, err
 	}
+
+	for _, row := range firstSeriesValues(resp) {
+		if row[0] == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func retentionPolicyStatement(conn *client.Client, verb string, rp retentionPolicyModel, database string) error {
+	query := fmt.Sprintf("%s RETENTION POLICY %q ON %q DURATION %s REPLICATION %d", verb, rp.Name.ValueString(), database, rp.Duration.ValueString(), rp.Replication.ValueInt64())
+	if s := rp.ShardGroupDuration.ValueString(); s != "" {
+		query += " SHARD DURATION " + s
+	}
+	if rp.Default.ValueBool() {
+		query += " DEFAULT"
+	}
+	return exec(conn, query)
 }
 
 // upsertRetentionPolicy creates the retention policy, or alters it if it already exists, e.g. the
 // "autogen" policy InfluxDB creates with every database.
-func upsertRetentionPolicy(conn *client.Client, policyName string, duration string, replication int, shardGroupDuration string, defaultPolicy bool, database string) error {
-	exists, err := retentionPolicyExists(conn, policyName, database)
+func upsertRetentionPolicy(conn *client.Client, rp retentionPolicyModel, database string) error {
+	resp, err := queryResponse(conn, fmt.Sprintf("SHOW RETENTION POLICIES ON %q", database))
 	if err != nil {
 		return err
 	}
 
-	if exists {
-		return updateRetentionPolicy(conn, policyName, duration, replication, shardGroupDuration, defaultPolicy, database)
-	}
-
-	return createRetentionPolicy(conn, policyName, duration, replication, shardGroupDuration, defaultPolicy, database)
-}
-
-func retentionPolicyExists(conn *client.Client, policyName string, database string) (bool, error) {
-	resp, err := conn.Query(client.Query{Command: fmt.Sprintf("SHOW RETENTION POLICIES ON %q", database)})
-	if err != nil {
-		return false, err
-	}
-	if resp.Error() != nil {
-		return false, resp.Error()
-	}
-
+	verb := "CREATE"
 	for _, series := range resp.Results[0].Series {
 		for _, values := range series.Values {
-			if len(values) > 0 && values[0] == policyName {
-				return true, nil
+			if len(values) > 0 && values[0] == rp.Name.ValueString() {
+				verb = "ALTER"
 			}
 		}
 	}
 
-	return false, nil
+	return retentionPolicyStatement(conn, verb, rp, database)
 }
 
-func deleteRetentionPolicy(conn *client.Client, policyName string, database string) error {
-	return exec(conn, fmt.Sprintf("DROP RETENTION POLICY %q ON %q", policyName, database))
-}
-
-func readDatabase(d *schema.ResourceData, meta interface{}) error {
-	conn := meta.(*client.Client)
-	name := d.Id()
-
-	// InfluxDB doesn't have a command to check the existence of a single
-	// database, so we instead must read the list of all databases and see
-	// if ours is present in it.
-	query := client.Query{
-		Command: "SHOW DATABASES",
-	}
-
-	resp, err := conn.Query(query)
+func readRetentionPolicies(conn *client.Client, database string, prior []retentionPolicyModel) ([]retentionPolicyModel, error) {
+	resp, err := queryResponse(conn, fmt.Sprintf("SHOW RETENTION POLICIES ON %q", database))
 	if err != nil {
-		return err
-	}
-	if resp.Error() != nil {
-		return resp.Error()
+		return nil, err
 	}
 
-	for _, result := range firstSeriesValues(resp) {
-		if result[0] == name {
-			d.Set("name", d.Id())
-			err := readRetentionPolicies(d, meta)
-			if err != nil {
-				return err
-			}
-			return nil
-		}
+	// The default "autogen" policy InfluxDB creates with every database is
+	// only tracked once it is managed, i.e. configured or in state.
+	priorByName := map[string]retentionPolicyModel{}
+	for _, rp := range prior {
+		priorByName[rp.Name.ValueString()] = rp
 	}
 
-	// If we fell out here then we didn't find our database in the list.
-	d.SetId("")
-
-	return nil
-}
-
-func readRetentionPolicies(d *schema.ResourceData, meta interface{}) error {
-	conn := meta.(*client.Client)
-	name := d.Id()
-
-	query := client.Query{
-		Command: fmt.Sprintf("SHOW RETENTION POLICIES ON %q", name),
-	}
-
-	resp, err := conn.Query(query)
-	if err != nil {
-		return err
-	}
-
-	if resp.Error() != nil {
-		return resp.Error()
-	}
-
-	defaultRetentionPolicy := map[string]interface{}{
-		"name":               "autogen",
-		"duration":           "0s",
-		"shardgroupduration": "168h0m0s",
-		"replication":        1,
-		"default":            true,
-	}
-
-	// The default "autogen" policy InfluxDB creates with every database is only tracked once it is
-	// managed, i.e. present in state.
-	managed := map[string]bool{}
-	if v, ok := d.GetOk("retention_policies"); ok {
-		for _, rp := range v.(*schema.Set).List() {
-			managed[rp.(map[string]interface{})["name"].(string)] = true
-		}
-	}
-
-	retentionPolicies := []interface{}{}
+	rps := []retentionPolicyModel{}
 
 	for _, series := range resp.Results[0].Series {
 		// Look columns up by name: InfluxDB 1.12 added futureWriteLimit and
@@ -241,105 +341,41 @@ func readRetentionPolicies(d *schema.ResourceData, meta interface{}) error {
 		for _, name := range []string{"name", "duration", "shardGroupDuration", "replicaN", "default"} {
 			i := slices.Index(series.Columns, name)
 			if i < 0 {
-				return fmt.Errorf("SHOW RETENTION POLICIES: missing column %q (got %v)", name, series.Columns)
+				return nil, fmt.Errorf("SHOW RETENTION POLICIES: missing column %q (got %v)", name, series.Columns)
 			}
 			col[name] = i
 		}
 
-		for _, result := range series.Values {
-
-			replication, err := result[col["replicaN"]].(json.Number).Int64()
+		for _, row := range series.Values {
+			replication, err := row[col["replicaN"]].(json.Number).Int64()
 			if err != nil {
-				return err
+				return nil, err
 			}
 
-			retentionPolicy := map[string]interface{}{
-				"name":               result[col["name"]].(string),
-				"duration":           result[col["duration"]].(string),
-				"shardgroupduration": result[col["shardGroupDuration"]].(string),
-				"replication":        int(replication),
-				"default":            result[col["default"]].(bool),
-			}
+			name, _ := row[col["name"]].(string)
+			duration, _ := row[col["duration"]].(string)
+			shard, _ := row[col["shardGroupDuration"]].(string)
+			isDefault, _ := row[col["default"]].(bool)
 
-			if reflect.DeepEqual(retentionPolicy, defaultRetentionPolicy) && !managed["autogen"] {
+			p, managed := priorByName[name]
+			if name == "autogen" && !managed && duration == "0s" && shard == "168h0m0s" && replication == 1 && isDefault {
 				continue
 			}
 
-			retentionPolicies = append(retentionPolicies, retentionPolicy)
-		}
-	}
-
-	d.Set("retention_policies", retentionPolicies)
-	return nil
-}
-
-func deleteDatabase(d *schema.ResourceData, meta interface{}) error {
-	conn := meta.(*client.Client)
-	name := d.Id()
-
-	queryStr := fmt.Sprintf("DROP DATABASE %q", name)
-	query := client.Query{
-		Command: queryStr,
-	}
-
-	resp, err := conn.Query(query)
-	if err != nil {
-		return err
-	}
-	if resp.Error() != nil {
-		return resp.Error()
-	}
-
-	return nil
-}
-
-func updateDatabase(d *schema.ResourceData, meta interface{}) error {
-	conn := meta.(*client.Client)
-	name := d.Get("name").(string)
-
-	if d.HasChange("retention_policies") {
-		oldRPVal, newRPVal := d.GetChange("retention_policies")
-		oldRPs := oldRPVal.(*schema.Set).List()
-		newRPs := newRPVal.(*schema.Set).List()
-
-		newRPMap := make(map[string]bool)
-		oldRPMap := make(map[string]bool)
-
-		for _, newRP := range newRPs {
-			newPolicy := newRP.(map[string]interface{})
-			policyName := newPolicy["name"].(string)
-			newRPMap[policyName] = true
-		}
-
-		// RPs in old map but not in new map should be deleted, we'll also create old policies while we are at it
-		for _, oldRP := range oldRPs {
-			oldPolicy := oldRP.(map[string]interface{})
-			policyName := oldPolicy["name"].(string)
-			oldRPMap[policyName] = true
-
-			if !newRPMap[policyName] {
-				if err := deleteRetentionPolicy(conn, policyName, name); err != nil {
-					return err
-				}
+			if managed {
+				duration = keepEquivalentDuration(p.Duration, duration)
+				shard = keepEquivalentDuration(p.ShardGroupDuration, shard)
 			}
-		}
 
-		for _, newRP := range newRPs {
-			newPolicy := newRP.(map[string]interface{})
-			policyName := newPolicy["name"].(string)
-
-			// If policy is not in old map, it has to be created newly, otherwise it has to be updated
-			if !oldRPMap[policyName] {
-				if err := upsertRetentionPolicy(conn, policyName, newPolicy["duration"].(string), newPolicy["replication"].(int), newPolicy["shardgroupduration"].(string), newPolicy["default"].(bool), name); err != nil {
-					return err
-				}
-			} else {
-				if err := updateRetentionPolicy(conn, policyName, newPolicy["duration"].(string), newPolicy["replication"].(int), newPolicy["shardgroupduration"].(string), newPolicy["default"].(bool), name); err != nil {
-					return err
-				}
-			}
+			rps = append(rps, retentionPolicyModel{
+				Name:               types.StringValue(name),
+				Duration:           types.StringValue(duration),
+				Replication:        types.Int64Value(replication),
+				ShardGroupDuration: types.StringValue(shard),
+				Default:            types.BoolValue(isDefault),
+			})
 		}
 	}
 
-	return readDatabase(d, meta)
+	return rps, nil
 }

@@ -1,9 +1,15 @@
 package influxdb
 
 import (
+	"context"
+	"net/url"
+	"os"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-framework/provider"
+	"github.com/hashicorp/terraform-plugin-framework/providerserver"
+	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
+	"github.com/influxdata/influxdb/client"
 )
 
 // To run these acceptance tests, you will need an InfluxDB server.
@@ -14,22 +20,35 @@ import (
 // To run the tests against a remote InfluxDB server, set the INFLUXDB_URL,
 // INFLUXDB_USERNAME and INFLUXDB_PASSWORD environment variables.
 
-var testAccProviders map[string]*schema.Provider
-var testAccProvider *schema.Provider
+var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServer, error){
+	"influxdb": providerserver.NewProtocol6WithError(New("test")()),
+}
 
-func init() {
-	testAccProvider = Provider()
-	testAccProviders = map[string]*schema.Provider{
-		"influxdb": testAccProvider,
+// testAccClient returns an InfluxDB client configured like the provider, from
+// the environment.
+func testAccClient() (*client.Client, error) {
+	u, err := url.Parse(os.Getenv("INFLUXDB_URL"))
+	if err != nil || u.Host == "" {
+		u, _ = url.Parse(defaultURL)
 	}
+
+	return client.NewClient(client.Config{
+		URL:      *u,
+		Username: os.Getenv("INFLUXDB_USERNAME"),
+		Password: os.Getenv("INFLUXDB_PASSWORD"),
+	})
 }
 
 func TestProvider(t *testing.T) {
-	if err := Provider().InternalValidate(); err != nil {
-		t.Fatalf("err: %s", err)
-	}
-}
+	ctx := context.Background()
+	p := New("test")()
 
-func TestProvider_impl(t *testing.T) {
-	var _ *schema.Provider = Provider()
+	resp := &provider.SchemaResponse{}
+	p.Schema(ctx, provider.SchemaRequest{}, resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("schema: %v", resp.Diagnostics)
+	}
+	if diags := resp.Schema.ValidateImplementation(ctx); diags.HasError() {
+		t.Fatalf("schema: %v", diags)
+	}
 }
