@@ -1,6 +1,6 @@
 module github.com/terraform-providers/terraform-provider-influxdb
 
-go 1.26.10
+go 1.27.4
 
 require (
 	github.com/hashicorp/go-cty v1.5.0
