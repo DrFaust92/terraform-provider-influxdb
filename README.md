@@ -11,7 +11,8 @@ Requirements
 ------------
 
 -	[Terraform](https://www.terraform.io/downloads.html) 1.5.x
--	[Go](https://golang.org/doc/install) 1.16 (to build the provider plugin)
+-	[Go](https://golang.org/doc/install) (version in `go.mod`, to build the provider plugin)
+-	InfluxDB 1.x. Acceptance tests run against 1.11 and 1.12; InfluxDB 2.x and 3.x are not supported
 
 Building The Provider
 ---------------------
