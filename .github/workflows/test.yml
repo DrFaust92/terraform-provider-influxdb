@@ -5,23 +5,22 @@ on:
   push:
     branches:
       - "master"
+permissions:
+  contents: read
 jobs:
   test:
     name: Run tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v5.2.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: "go.mod"
-
-      - name: flux requirements
-        run: |
-          sudo apt-get install -y clang pkg-config
-          PKG_CONFIG=./pkg-config.sh go get github.com/influxdata/pkg-config
 
       - name: Test
         run: make test build
