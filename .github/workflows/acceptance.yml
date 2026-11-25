@@ -9,11 +9,19 @@ permissions:
   contents: read
 jobs:
   acceptance:
-    name: Run acceptance tests (InfluxDB ${{ matrix.version }})
+    name: Run acceptance tests (InfluxDB ${{ matrix.version }}, Terraform ${{ matrix.terraform }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
+        # The oldest supported Terraform (protocol 6) and the latest. Tests
+        # that need newer Terraform, such as write-only arguments, skip on 1.0.
+        terraform:
+          - "1.0.11"
+          - "1.15.7"
+        version:
+          - "1.11"
+          - "1.12"
         include:
           - version: "1.11"
             image: influxdb:1.11@sha256:300a2bb2fd9d66c476c4bd7ca3ce6135d485151cce19b605ef7ab2a000fa1845
@@ -48,4 +56,5 @@ jobs:
       - name: Run acceptance tests
         env:
           INFLUXDB_URL: http://localhost:8086/
+          TF_ACC_TERRAFORM_VERSION: ${{ matrix.terraform }}
         run: make testacc
